@@ -338,19 +338,16 @@ class Worker(Thread):
                 else:
                     self.done_callback()
         except Exception as exception:
-            # Execute the error callback, if it exits;
-            #  otherwise raise the exception (unhandled)
-            if self.error_callback is not None:
-                # Call the function based on the amount of arguments it expects
-                argument_spec = inspect.getfullargspec(self.error_callback)
-                argument_count = len(argument_spec.args)
-
-                if argument_count == 1:
-                    self.error_callback(exception)
-                else:
-                    self.error_callback()
-            else:
+            if self.error_callback is None:
                 raise exception
+            # Call the function based on the amount of arguments it expects
+            argument_spec = inspect.getfullargspec(self.error_callback)
+            argument_count = len(argument_spec.args)
+
+            if argument_count == 1:
+                self.error_callback(exception)
+            else:
+                self.error_callback()
         finally:
             # Cleanup the callbacks (decrease reference counts)
             if self.done_callback is not None:
@@ -369,7 +366,7 @@ def get_algorithms(api_url='https://hashdb.openanalysis.net', timeout=None):
     if timeout is None:
         timeout = HASHDB_REQUEST_TIMEOUT
 
-    algorithms_url = api_url + '/hash'
+    algorithms_url = f'{api_url}/hash'
     r = requests.get(algorithms_url, timeout=timeout)
     if not r.ok:
         raise HashDBError("Get algorithms API request failed, status %s" % r.status_code)
@@ -411,13 +408,12 @@ def get_module_hashes(module_name, algorithm, permutation, api_url='https://hash
     global HASHDB_REQUEST_TIMEOUT
     if timeout is None:
         timeout = HASHDB_REQUEST_TIMEOUT
-    
+
     module_url = api_url + '/module/%s/%s/%s' % (module_name, algorithm, permutation)
     r = requests.get(module_url, timeout=timeout)
     if not r.ok:
         raise HashDBError("Get hash API request failed, status %s" % r.status_code)
-    results = r.json()
-    return results
+    return r.json()
 
 
 def hunt_hash(hash_value, api_url='https://hashdb.openanalysis.net', timeout = None):
@@ -425,10 +421,10 @@ def hunt_hash(hash_value, api_url='https://hashdb.openanalysis.net', timeout = N
     global HASHDB_REQUEST_TIMEOUT
     if timeout is None:
         timeout = HASHDB_REQUEST_TIMEOUT
-    
+
     matches = []
     hash_list = [hash_value]
-    module_url = api_url + '/hunt'
+    module_url = f'{api_url}/hunt'
     r = requests.post(module_url, json={"hashes": hash_list}, timeout=timeout)
     if not r.ok:
         print(module_url)
@@ -446,8 +442,8 @@ def hunt_hash(hash_value, api_url='https://hashdb.openanalysis.net', timeout = N
 # Save and restore settings
 #--------------------------------------------------------------------------
 def load_settings():
-    global HASHDB_API_URL 
-    global HASHDB_USE_XOR, HASHDB_XOR_VALUE 
+    global HASHDB_API_URL
+    global HASHDB_USE_XOR, HASHDB_XOR_VALUE
     global HASHDB_ALGORITHM, ENUM_PREFIX
     global NETNODE_NAME
     node = ida_netnode.netnode(NETNODE_NAME)
@@ -455,10 +451,7 @@ def load_settings():
         if bool(node.hashstr("HASHDB_API_URL")):
             HASHDB_API_URL = node.hashstr("HASHDB_API_URL")
         if bool(node.hashstr("HASHDB_USE_XOR")):
-            if node.hashstr("HASHDB_USE_XOR").lower() == "true":
-                HASHDB_USE_XOR = True
-            else: 
-                HASHDB_USE_XOR = False
+            HASHDB_USE_XOR = node.hashstr("HASHDB_USE_XOR").lower() == "true"
         if bool(node.hashstr("HASHDB_XOR_VALUE")):
             HASHDB_XOR_VALUE = int(node.hashstr("HASHDB_XOR_VALUE"))
         if bool(node.hashstr("HASHDB_ALGORITHM")) and bool(node.hashstr("HASHDB_ALGORITHM_SIZE")):
@@ -586,9 +579,6 @@ HashDB Settings
                 self.EnableField(self.iXor, True)
             else:
                 self.EnableField(self.iXor, False)
-        else:
-            pass
-            #print("Unknown fid %r" % fid)
         return 1
 
     @staticmethod
@@ -609,10 +599,7 @@ HashDB Settings
         # Set default values
         f.iServer.value = api_url
         f.iEnum.value = enum_prefix
-        if use_xor:
-            f.rXor.checked = True
-        else:
-            f.rXor.checked = False
+        f.rXor.checked = bool(use_xor)
         f.iXor.value = xor_value
         # Show form
         ok = f.Execute()
@@ -623,7 +610,7 @@ HashDB Settings
             HASHDB_API_URL = f.iServer.value
             ENUM_PREFIX = f.iEnum.value
             # Check if algorithm is selected
-            if f.cAlgoChooser.selection == None:
+            if f.cAlgoChooser.selection is None:
                 # No algorithm selected bail!
                 idaapi.msg("HashDB: No algorithm selected!\n")
                 f.Free()
@@ -668,9 +655,6 @@ More than one string matches this hash!
             self.SetFocusedField(self.cbCollisions)
         elif fid == self.cbCollisions.id:
             sel_idx = self.GetControlValue(self.cbCollisions)
-        else:
-            pass
-            #print("Unknown fid %r" % fid)
         return 1
 
     @staticmethod
@@ -740,10 +724,8 @@ Matched Algorithms
         })
 
     def OnFormChange(self, fid):
-        if fid == -1:
-            # Hide algorithm chooser if empty
-            if self.cAlgoChooser.chooser.items == []:
-                self.ShowField(self.cAlgoChooser, False)
+        if fid == -1 and self.cAlgoChooser.chooser.items == []:
+            self.ShowField(self.cAlgoChooser, False)
         return 1
 
     def show(algo_list):
@@ -754,15 +736,14 @@ Matched Algorithms
         # Set default values
         if len(algo_list) == 0:
             msg = "No algorithms matched the hash."
-            f = hunt_result_form_t(algo_list, msg)
         else:
             msg = "The following algorithms contain a matching hash.\nSelect an algorithm to set as the default for HashDB."
-            f = hunt_result_form_t(algo_list, msg)
+        f = hunt_result_form_t(algo_list, msg)
         f, args = f.Compile()
         # Show form
         ok = f.Execute()
         if ok == 1:
-            if f.cAlgoChooser.selection == None:
+            if f.cAlgoChooser.selection is None:
                 # No algorithm selected bail!
                 f.Free()
                 return False
@@ -808,9 +789,6 @@ Do you want to import all function hashes from this module?
             self.SetFocusedField(self.cbModules)
         elif fid == self.cbModules.id:
             sel_idx = self.GetControlValue(self.cbModules)
-        else:
-            pass
-            #print("Unknown fid %r" % fid)
         return 1
 
     @staticmethod
@@ -904,9 +882,11 @@ def get_invalid_characters(string: str) -> list:
     # Iterate through the characters in the string,
     #  and check if they are valid using
     #  ida_name.is_ident_cp
-    for index, character in enumerate(string):
-        if not ida_name.is_ident_cp(ord(character)):
-            invalid_characters.append(index)
+    invalid_characters.extend(
+        index
+        for index, character in enumerate(string)
+        if not ida_name.is_ident_cp(ord(character))
+    )
 
     # Return the invalid characters
     return invalid_characters
@@ -916,17 +896,14 @@ def html_format_invalid_characters(string: str, invalid_characters: list, color:
     # Are there any invalid characters in the string?
     if not invalid_characters:
         return string
-    
-    # Format the invalid characters
-    formatted_string = ""
-    for index, character in enumerate(string):
-        if index in invalid_characters and color:
-            formatted_string += "<span style=\"color: {}\">{}</span>".format(color, character)
-        else:
-            formatted_string += character
 
     # Return the formatted string
-    return formatted_string
+    return "".join(
+        "<span style=\"color: {}\">{}</span>".format(color, character)
+        if index in invalid_characters and color
+        else character
+        for index, character in enumerate(string)
+    )
 
 
 def add_enums(enum_name, hash_list, enum_size = 0):
@@ -942,7 +919,7 @@ def add_enums(enum_name, hash_list, enum_size = 0):
         global HASHDB_ALGORITHM_SIZE
         enum_size = HASHDB_ALGORITHM_SIZE // 8
 
-    
+
     # Create enum
     enum_id = idc.add_enum(-1, enum_name, ida_bytes.hex_flag())
     if enum_id == idaapi.BADNODE:
@@ -954,7 +931,7 @@ def add_enums(enum_name, hash_list, enum_size = 0):
     # Set the enum size/width (expected to return True for valid sizes)
     if not ida_enum.set_enum_width(enum_id, enum_size):
         return None
-    
+
     # IDA API defines (https://hex-rays.com/products/ida/support/idapython_docs/ida_enum.html)
     ENUM_MEMBER_ERROR_SUCCESS = 0 # successfully added
     ENUM_MEMBER_ERROR_NAME    = 1 # a member with this name already exists
@@ -964,17 +941,16 @@ def add_enums(enum_name, hash_list, enum_size = 0):
         # First, we have to check if this name and value already exist in the enum
         if ida_enum.get_enum_member(enum_id, value, 0, 0) != idaapi.BADNODE:
             continue # Skip if the value already exists in the enum
-        
+
         # Replace spaces with underscores
-        for index, character in enumerate(member_name):
+        for character in member_name:
             if character.isspace():
                 # Count not specified to replace all occurrences at once
                 member_name = member_name.replace(character, '_')
 
         # Check if a member name is valid
         skip = False
-        invalid_characters = get_invalid_characters(member_name)
-        while invalid_characters:
+        while invalid_characters := get_invalid_characters(member_name):
             # Open the unqualified name form
             new_member_name = unqualified_name_replace_t.show(member_name, invalid_characters)
 
@@ -982,10 +958,8 @@ def add_enums(enum_name, hash_list, enum_size = 0):
             if not new_member_name:
                 skip = True
                 break
-            
+
             member_name = new_member_name
-            # Check if the user provided an invalid name
-            invalid_characters = get_invalid_characters(member_name)
         if skip:
             idaapi.msg("HashDB: Skipping hash result \"{}\" with value: {}\n".format(member_name, hex(value)))
             continue
@@ -993,9 +967,9 @@ def add_enums(enum_name, hash_list, enum_size = 0):
         # Attempt to generate a name, and insert the value
         for index in range(MAXIMUM_ATTEMPTS):
             if is_api:
-                enum_name = member_name + '_' + str(index)
+                enum_name = f'{member_name}_{str(index)}'
             else:
-                enum_name = member_name if not index else member_name + '_' + str(index - 1) # -1 to begin at 0 as opposed to `string_1`
+                enum_name = member_name if not index else f'{member_name}_{str(index - 1)}'
 
             result = ida_enum.add_enum_member(enum_id, enum_name, value)
             # Successfully added to the list
@@ -1013,7 +987,7 @@ def generate_enum_name(prefix: str) -> str:
     Generates an enum name from a prefix
     """
     global HASHDB_ALGORITHM
-    return prefix + '_' + HASHDB_ALGORITHM
+    return f'{prefix}_{HASHDB_ALGORITHM}'
 
 
 def make_const_enum(enum_id, hash_value):
@@ -1151,10 +1125,10 @@ def global_settings():
     global HASHDB_XOR_VALUE
     global HASHDB_ALGORITHM
     global ENUM_PREFIX
-    if HASHDB_ALGORITHM != None:
-        algorithms = [[HASHDB_ALGORITHM, str(HASHDB_ALGORITHM_SIZE)]]
-    else:
+    if HASHDB_ALGORITHM is None:
         algorithms = []
+    else:
+        algorithms = [[HASHDB_ALGORITHM, str(HASHDB_ALGORITHM_SIZE)]]
     settings_results = hashdb_settings_t.show(api_url=HASHDB_API_URL, 
                                               enum_prefix=ENUM_PREFIX,
                                               use_xor=HASHDB_USE_XOR,
@@ -2068,7 +2042,7 @@ def inject_actions(form, popup, form_type):
     # disassembly window
     #
 
-    if (form_type == idaapi.BWN_DISASMS) or (form_type == idaapi.BWN_PSEUDOCODE):
+    if form_type in [idaapi.BWN_DISASMS, idaapi.BWN_PSEUDOCODE]:
         # insert the action entry into the menu
         #
 
